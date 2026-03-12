@@ -22,7 +22,8 @@ _help = """Must be either 'negatives', 'fit', 'evaluate',
 parser = argparse.ArgumentParser(description=desc)
 subparsers = parser.add_subparsers(help=_help, required=True, dest='cmd')
 
-#
+
+
 
 negatives_parser = subparsers.add_parser("negatives", 
 	help="Sample GC-matched negatives.")
@@ -78,7 +79,7 @@ json_parser.add_argument("-pe", "--paired_end", action='store_true',
 
 #
 
-fit_parser = subparsers.add_parser("fit", help="Fit a BPNet model.")
+fit_parser = subparsers.add_parser("fit", help="Fit a DeepSTARR model.")
 fit_parser.add_argument("-p", "--parameters", type=str, required=True,
 	help="A JSON file containing the parameters for fitting the model.")
 
@@ -227,31 +228,46 @@ default_marginalize_parameters = {
 
 
 default_fit_parameters = {
-	'n_filters': 64,
-	'n_layers': 8,
-	'profile_output_bias': True,
-	'count_output_bias': True,
+	'deepstarr_model_params':{
+    "input_length":1001,
+    "input_channel":4, 
+    "output_channel1":256,
+    "output_channel2":120,
+    "output_channel3":60, 
+    "output_channel4":60, 
+    "kernel_size1":7, 
+    "kernel_size2":3, 
+    "kernel_size3":3, 
+    "kernel_size4":3, 
+    "stride":1, 
+    "kernel_pool":2,
+    "padding":"same", 
+    "nlayers_cnn":4, 
+    "nlayers_fc":2,
+    "output_fc1":64, 
+    "output_fc2":256, 
+    "prob":0.4
+	},
+
 	'name': None,
 	'batch_size': 64,
-	'in_window': 2114,
-	'out_window': 1000,
+	'in_window': 1001,
+	'out_window': 1001,
 	'max_jitter': 128,
 	'reverse_complement': True,
 	'reverse_complement_average': True,
 	'summits': False,
 	'max_epochs': 50,
-	'lr': 0.001,
+	'lr': 0.005,
 	'negative_ratio': 0.333,
 	'count_loss_weight': None,
 	'dtype': 'float32',
 	'device': 'cuda',
-	'scheduler': True,
+	'scheduler': False,
 	'early_stopping': 10,
 	'verbose': False,
-
 	'min_counts': 0,
 	'max_counts': 99999999,
-
 	'training_chroms': training_chroms,
 	'validation_chroms': validation_chroms,
 	'sequences': None,
@@ -262,14 +278,13 @@ default_fit_parameters = {
 	'controls': None,
 	'random_state': None,
 	'performance_filename': 'performance.tsv',
-
 	'skip': False,
 }
 
 default_pipeline_parameters = {
 	# Shared parameters
-	'in_window': 2114,
-	'out_window': 1000,
+	'in_window': 1001,
+	'out_window': 1001,
 	'name': None,
 	'model': None,
 	'dtype': 'float32',
@@ -293,11 +308,11 @@ default_pipeline_parameters = {
 
 	# Data processing parameters
 	'preprocessing_parameters': {
-		'unstranded': False,
+		'unstranded': True,
 		'fragments': False,
-		'paired_end': False,
-		'pos_shift': 0,
-		'neg_shift': 0,
+		'paired_end': True,
+		'pos_shift': 4,
+		'neg_shift': -4,
 		'callpeaks_format': None,
 		'callpeaks_gsize': 'hs',
 		'callpeaks_q': 0.01,
@@ -305,32 +320,7 @@ default_pipeline_parameters = {
 	},
 		
 	# Fit parameters
-	'fit_parameters': {
-		'n_filters': 64,
-		'n_layers': 8,
-		'profile_output_bias': True,
-		'count_output_bias': True,
-		'batch_size': 64,
-		'lr': 0.001,
-		'scheduler': True,
-		'negative_ratio': 0.333,
-		'count_loss_weight': None,
-		'early_stopping': 5,
-		'max_jitter': 128,
-		'reverse_complement': True,
-		'reverse_complement_average': True,
-		'max_epochs': 20,
-		'training_chroms': training_chroms,
-		'validation_chroms': validation_chroms,
-		'sequences': None,
-		'loci': None,
-		'signals': None,
-		'controls': None,
-		'verbose': None,
-		'random_state': None,
-		'summits': False,
-		'performance_filename': None,
-	},
+	'fit_parameters': default_fit_parameters,
 
 	# Attribution parameters
 	'attribute_parameters': {
@@ -567,7 +557,7 @@ if args.cmd == "fit":
 	if parameters['skip']:
 		sys.exit()
 
-	from bpnetlite.bpnet import BPNet
+	from bpnetlite.bpnet import DeepSTARR
 	
 	if parameters['verbose']:
 		print("Training Chroms: ", parameters['training_chroms'])
@@ -619,53 +609,18 @@ if args.cmd == "fit":
 		print("Validation Set Size: ", valid_data[0].shape[0], "\n")
 
 
-	if parameters['count_loss_weight'] is None:
-		peak_read_count = training_data.dataset.peak_signals.sum(axis=-1)
-		count_loss_weight = peak_read_count.mean(axis=(0, 1)).item()
-		parameters['count_loss_weight'] = count_loss_weight
-
-		if parameters['verbose']:
-			print("Count loss weight set to {:4.4}".format(count_loss_weight))
-			print("Negative Ratio: 1:{:4.4} pos:neg\n".format(
-				parameters['negative_ratio']))
-
-
-	if parameters['controls'] is not None:
-		valid_sequences, valid_signals, valid_controls = valid_data
-		n_control_tracks = len(parameters['controls'])
-	else:
-		valid_sequences, valid_signals = valid_data
-		valid_controls = None
-		n_control_tracks = 0
-
-	trimming = (parameters['in_window'] - parameters['out_window']) // 2
-
-	model = BPNet(n_filters=parameters['n_filters'], 
-		n_layers=parameters['n_layers'],
-		n_outputs=len(parameters['signals']),
-		n_control_tracks=n_control_tracks,
-		profile_output_bias=parameters['profile_output_bias'],
-		count_output_bias=parameters['count_output_bias'],
-		count_loss_weight=parameters['count_loss_weight'],
-		trimming=trimming,
-		name=parameters['name'],
-		verbose=parameters['verbose']).to(parameters['device'])
+	model = DeepSTARR(
+		**parameters['deepstarr_model_params']
+		).to(parameters['device'])
 
 	if parameters['verbose']:
-		print("Model has {} dilated layers and {} filters".format(
-			parameters['n_layers'], parameters['n_filters'])
-		)
 		print("Model has {} trainable parameters.\n".format(
 			sum(p.numel() for p in model.parameters() if p.requires_grad))
 		)
 
 	optimizer = torch.optim.Adam(model.parameters(), lr=parameters['lr'])
+	loss_fn = torch.nn.MSELoss()
 	
-	if parameters['scheduler']:	
-		scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5,
-			patience=5, threshold=0.0001, min_lr=0.0001)
-	else:
-		scheduler = None
 
 	model.fit(training_data, optimizer, scheduler,
 		X_valid=valid_sequences, 
@@ -675,6 +630,23 @@ if args.cmd == "fit":
 		early_stopping=parameters['early_stopping'],
 		dtype=parameters['dtype'],
 		device=parameters['device'])
+
+
+	model.fit(
+		training_data,
+		optimizer,
+		loss_fn,
+		X_valid=valid_data[0], 
+		y_valid=valid_data[1], 
+		max_epochs=parameters['max_epochs'],
+		batch_size=parameters['batch_size'],
+		early_stopping=parameters['early_stopping'],
+		dtype=parameters['dtype'],
+		device=parameters['device'],
+		profile_loader_used=True,
+		savepath = parameters['model_savepath']
+		savepath="/users/nikolaus.mandlburger/nikolaus.mandlburger/Projects/deepstarr_cherimoya_benchmarking/res/ENCSR483RKN/model.torch"
+)
 	
 	### Evaluate Model
 	
@@ -1048,7 +1020,7 @@ elif args.cmd == 'pipeline':
 			print("\nStep 0.3: Find GC-matched negative regions.")
 
 		args = [
-			"bpnet", "negatives", 
+			"deepstarr", "negatives", 
 			"-i", parameters["loci"][0],
 			"-f", parameters["sequences"],
 			"-o", pname + ".negatives.bed"
@@ -1064,17 +1036,17 @@ elif args.cmd == 'pipeline':
 
 
 	###
-	# Step 1: Fit a BPNet model to the provided data
+	# Step 1: Fit a DeepSTARR model to the provided data
 	###
 
 	if parameters['verbose']:
-		print("\nStep 1: Fitting a BPNet model")
+		print("\nStep 1: Fitting a DeepSTARR model")
 
 	fit_parameters = _extract_set(parameters, default_fit_parameters, 
 		'fit_parameters')
 
 	if parameters.get('model', None) == None:
-		name = pname + '.bpnet.fit.json'
+		name = pname + '.deepstarr.fit.json'
 		parameters['model'] = pname + '.torch'
 		_check_set(fit_parameters, 'performance_filename', pname + '.performance.tsv')
 
@@ -1082,7 +1054,7 @@ elif args.cmd == 'pipeline':
 			outfile.write(json.dumps(fit_parameters, sort_keys=True, indent=4))
 
 		if not parameters['dry_run']:
-			subprocess.run(["bpnet", "fit", "-p", name], check=True)
+			subprocess.run(["deepstarr", "fit", "-p", name], check=True)
 
 
 	###
