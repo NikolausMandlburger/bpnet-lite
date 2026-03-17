@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import time
+
 from scipy.stats import pearsonr
 
 from tangermeme.predict import predict
@@ -113,7 +115,7 @@ class DeepSTARR(torch.nn.Module):
             device='cuda',
             early_stopping=None,
             profile_loader_used=True,
-            savepath=None
+            name="model"
            ):
 
         """Fit the model to data and validate it periodically.
@@ -176,6 +178,8 @@ class DeepSTARR(torch.nn.Module):
             number of epochs has been hit without improvement in performance. 
             Default is None.
         """
+
+        savepath=f"{name}.torch"
 
         if X_valid is not None:
             if profile_loader_used:
